@@ -1,0 +1,21 @@
+{
+  "name": "lux-av-bot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/marchansen1/lux-av-bot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/marchansen1/lux-av-bot/issues"
+  },
+  "homepage": "https://github.com/marchansen1/lux-av-bot#readme"
+}
