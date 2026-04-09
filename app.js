@@ -26,40 +26,43 @@ const slackApp = new App({
 });
 
 // ===== SYSTEM PROMPT =====
-const SYSTEM_PROMPT = `You are Lux AV Help Desk, a live event AV technician assistant.
+const SYSTEM_PROMPT = `You are Lux AV Help Desk, a senior live event AV technician.
 
-CRITICAL RULES:
-- Be concise and operational
-- Assume user is on-site under time pressure
-- Prioritize fastest workaround first
-- Max 3 questions before giving a path
-- No theory without action
+GOAL:
+Rapidly diagnose issues with minimal back-and-forth.
 
-FORMAT EXACTLY:
+RULES:
+- Ask up to 3 targeted questions FIRST if cause is unclear
+- Only give full troubleshooting steps AFTER narrowing problem
+- Prioritize fastest isolation of fault
+- No theory, only actionable checks
+
+FORMAT:
 
 Likely issue:
-Immediate safety checks:
+Key questions:
 Fast diagnostic path:
 Fix / workaround:
 Next test if unresolved:
 Escalate to:
-Incident log:`;
+Incident log:
+
+CRITICAL MODE (🚨 or SHOW CRITICAL):
+→ Skip questions
+→ Give fastest workaround immediately`;
 
 // ===== CONTEXT DETECTION =====
 function detectContext(text) {
   const t = text.toLowerCase();
 
   if (t.includes("hdmi")) return "HDMI signal path issue (EDID / handshake / cable)";
-  if (t.includes("sdi")) return "SDI signal path issue (BNC / converter / routing)";
-  if (t.includes("wireless") || t.includes("barco") || t.includes("clickshare"))
+  if (t.includes("sdi")) return "SDI signal path issue (BNC / converters / routing)";
+  if (t.includes("wireless") || t.includes("clickshare") || t.includes("barco"))
     return "Wireless presentation issue (pairing / network / dongle)";
-  if (t.includes("mic") || t.includes("audio"))
-    return "Audio signal issue (gain / mute / routing)";
-  if (t.includes("power"))
-    return "Power issue (supply / distro / IEC)";
-
+  if (t.includes("audio") || t.includes("mic"))
+    return "Audio issue (gain / mute / routing)";
   if (t.includes("no signal"))
-    return "Display signal issue (cable / input / source mismatch)";
+    return "Display signal issue (input / cable / source mismatch)";
 
   return "General AV issue";
 }
@@ -78,6 +81,15 @@ async function saveIncident(threadTs, messages) {
 slackApp.event('app_mention', async ({ event, say, client }) => {
   try {
     console.log("MENTION EVENT RECEIVED");
+
+    // ===== HARD FILTER =====
+    if (event.bot_id || event.subtype) return;
+
+    // ===== DEDUPE =====
+    const eventKey = `event:${event.ts}`;
+    const alreadyProcessed = await redis.get(eventKey);
+    if (alreadyProcessed) return;
+    await redis.set(eventKey, "1", "EX", 60);
 
     const threadTs = event.thread_ts || event.ts;
     const userText = event.text;
@@ -104,12 +116,21 @@ slackApp.event('app_mention', async ({ event, say, client }) => {
       priorityNote = "\nPRIORITY: SHOW CRITICAL - fastest restore path only.";
     }
 
-    // ===== AI =====
+    // ===== QUESTION-FIRST LOGIC =====
+    const needsQuestions =
+      userText.length < 50 ||
+      userText.toLowerCase().includes("not working") ||
+      userText.toLowerCase().includes("issue");
+
+    // ===== AI CALL =====
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       temperature: 0.2,
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT + priorityNote },
+        {
+          role: 'system',
+          content: SYSTEM_PROMPT + priorityNote + (needsQuestions ? "\nAsk questions first." : "")
+        },
         { role: 'system', content: `Context: ${contextHint}` },
         { role: 'user', content: history.join('\n') }
       ]
@@ -117,7 +138,7 @@ slackApp.event('app_mention', async ({ event, say, client }) => {
 
     const reply = completion.choices[0].message.content;
 
-    // ===== RESPONSE + BUTTONS =====
+    // ===== RESPONSE =====
     await say({
       thread_ts: threadTs,
       blocks: [
