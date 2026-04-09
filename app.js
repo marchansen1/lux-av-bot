@@ -1,37 +1,27 @@
-// Lux AV Help Desk Slack Bot (Production Grade)
-
 // ===== IMPORTS =====
 import pkg from '@slack/bolt';
 const { App, ExpressReceiver } = pkg;
 
-// Create receiver with correct endpoint
-const receiver = new ExpressReceiver({
-  signingSecret: process.env.SLACK_SIGNING_SECRET,
-  endpoints: '/slack/events'
-});
-const PORT = process.env.PORT || 3000;
-
-receiver.app.listen(PORT, () => {
-  console.log(`🚀 Lux AV Help Desk running on port ${PORT}`);
-});
-const slackApp = new App({
-  token: process.env.SLACK_BOT_TOKEN,
-  receiver
-});
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
 import Redis from 'ioredis';
 
 dotenv.config();
 
-// ===== INIT =====
+// ===== INIT SERVICES =====
 const redis = new Redis(process.env.REDIS_URL);
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const slackApp = new App({
-  token: process.env.SLACK_BOT_TOKEN,
+// ===== SLACK RECEIVER (CRITICAL FOR EVENTS) =====
+const receiver = new ExpressReceiver({
   signingSecret: process.env.SLACK_SIGNING_SECRET,
   endpoints: '/slack/events'
+});
+
+// ===== SLACK APP =====
+const slackApp = new App({
+  token: process.env.SLACK_BOT_TOKEN,
+  receiver
 });
 
 // ===== SYSTEM PROMPT =====
@@ -66,7 +56,7 @@ async function getIncident(threadTs) {
 }
 
 async function saveIncident(threadTs, messages) {
-  await redis.set(threadTs, JSON.stringify(messages), 'EX', 86400); // 24h TTL
+  await redis.set(threadTs, JSON.stringify(messages), 'EX', 86400);
 }
 
 // ===== BUTTONS =====
@@ -103,7 +93,6 @@ slackApp.event('message', async ({ event, client }) => {
   try {
     if (event.bot_id || !event.text) return;
 
-    // Only respond in helpdesk channel
     if (!(await isHelpChannel(client, event.channel))) return;
 
     const threadTs = event.thread_ts || event.ts;
@@ -115,7 +104,7 @@ slackApp.event('message', async ({ event, client }) => {
       name: 'eyes'
     }).catch(() => {});
 
-    // Get incident history
+    // Incident memory
     let history = await getIncident(threadTs);
     history.push(event.text);
     history = history.slice(-10);
@@ -126,7 +115,6 @@ slackApp.event('message', async ({ event, client }) => {
     if (isCritical(event.text)) {
       priorityNote = '\nPRIORITY: SHOW CRITICAL - fastest workaround first.';
 
-      // Escalation alert
       await client.chat.postMessage({
         channel: event.channel,
         thread_ts: threadTs,
@@ -145,7 +133,6 @@ slackApp.event('message', async ({ event, client }) => {
 
     const reply = completion.choices[0].message.content;
 
-    // Send response with buttons
     await client.chat.postMessage({
       channel: event.channel,
       thread_ts: threadTs,
@@ -194,7 +181,8 @@ slackApp.action(/.*/, async ({ ack, body, client }) => {
 });
 
 // ===== START SERVER =====
-(async () => {
-  await slackApp.start(process.env.PORT || 3000);
-  console.log('🚀 Lux AV Help Desk (Production) running');
-})();
+const PORT = process.env.PORT || 3000;
+
+receiver.app.listen(PORT, () => {
+  console.log(`🚀 Lux AV Help Desk running on port ${PORT}`);
+});
