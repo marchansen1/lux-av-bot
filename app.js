@@ -25,6 +25,63 @@ const slackApp = new App({
   receiver
 });
 
+// ===== EQUIPMENT PROFILE =====
+const EQUIPMENT_PROFILE = `
+Lux AV Standard Equipment:
+
+Displays:
+- Panasonic projectors
+- LG Commercial Displays
+- LED walls including Absen and Unilumin
+- Novastar LED processors, MCTRL4K, R5, MCTRL660, TB3
+
+Signal:
+- Barco E2 presentation switchers
+- Blackmagic constellation camera switchers
+- Roland V160 switchers
+- HDMI distribution
+- SDI distribution (Blackmagic and Decimator)
+- Lightware UBEX-Pro20-HDMI-R100 and UBEX-Pro20-HDMI-F110
+
+Cameras:
+- Blackmagic Broadcast G2
+- Panasonic CX350
+- Panasonic PTZ cameras (AW-HE130, AW-UE160)
+- Panasonic PTZ controllers (AW-RP120, AW-RP50E, AW-RP60)
+
+Wireless:
+- Apple TVs
+- DJI SDI Transmission kit
+- Teradek Bolt XT 1000
+- Ubiquity AF-5X Air Fibre
+
+Comms:
+- RTS OMS Advanced Master Station
+- RTS DBP 4F 4CH Wired Beltpack Substations
+- RTS Roameo AP-1800 Wireless Access Point
+- RTS Roameo TR-1800 4CH Wireless Beltpack Substations
+
+Audio:
+- QSC systems
+- d&B audiotechnik system
+- JBL Vertec system
+- L-Acoustic Syva system
+- Shure wireless mics
+
+Cabling:
+- SDI (BNC)
+- HDMI (including adapters)
+- XLR
+- DMX
+- RJ45 ethernet
+- Ethercon 
+
+Common Issues:
+- HDMI handshake failures (especially Mac adapters)
+- SDI sync loss via converters
+- LED Screens have the wrong mapping configuration 
+`;
+
 // ===== SYSTEM PROMPT =====
 const SYSTEM_PROMPT = `You are Lux AV Help Desk, a senior live event AV technician.
 
@@ -55,14 +112,14 @@ CRITICAL MODE (🚨 or SHOW CRITICAL):
 function detectContext(text) {
   const t = text.toLowerCase();
 
-  if (t.includes("hdmi")) return "HDMI signal path issue (EDID / handshake / cable)";
-  if (t.includes("sdi")) return "SDI signal path issue (BNC / converters / routing)";
-  if (t.includes("wireless") || t.includes("clickshare") || t.includes("barco"))
-    return "Wireless presentation issue (pairing / network / dongle)";
+  if (t.includes("hdmi")) return "HDMI signal path (EDID / handshake)";
+  if (t.includes("sdi")) return "SDI signal path (BNC / routing)";
+  if (t.includes("clickshare") || t.includes("wireless"))
+    return "Wireless presentation system";
   if (t.includes("audio") || t.includes("mic"))
-    return "Audio issue (gain / mute / routing)";
+    return "Audio system issue";
   if (t.includes("no signal"))
-    return "Display signal issue (input / cable / source mismatch)";
+    return "Display signal issue";
 
   return "General AV issue";
 }
@@ -82,7 +139,7 @@ slackApp.event('app_mention', async ({ event, say, client }) => {
   try {
     console.log("MENTION EVENT RECEIVED");
 
-    // ===== HARD FILTER =====
+    // ignore bot + system messages
     if (event.bot_id || event.subtype) return;
 
     // ===== DEDUPE =====
@@ -131,6 +188,7 @@ slackApp.event('app_mention', async ({ event, say, client }) => {
           role: 'system',
           content: SYSTEM_PROMPT + priorityNote + (needsQuestions ? "\nAsk questions first." : "")
         },
+        { role: 'system', content: EQUIPMENT_PROFILE },
         { role: 'system', content: `Context: ${contextHint}` },
         { role: 'user', content: history.join('\n') }
       ]
@@ -141,32 +199,7 @@ slackApp.event('app_mention', async ({ event, say, client }) => {
     // ===== RESPONSE =====
     await say({
       thread_ts: threadTs,
-      blocks: [
-        {
-          type: "section",
-          text: { type: "mrkdwn", text: reply }
-        },
-        {
-          type: "actions",
-          elements: [
-            {
-              type: "button",
-              text: { type: "plain_text", text: "No Signal" },
-              value: "no_signal"
-            },
-            {
-              type: "button",
-              text: { type: "plain_text", text: "Audio Issue" },
-              value: "audio"
-            },
-            {
-              type: "button",
-              text: { type: "plain_text", text: "Wireless" },
-              value: "wireless"
-            }
-          ]
-        }
-      ]
+      text: reply
     });
 
     // ✅ done reaction
@@ -184,19 +217,6 @@ slackApp.event('app_mention', async ({ event, say, client }) => {
       thread_ts: event.thread_ts || event.ts
     });
   }
-});
-
-// ===== BUTTON HANDLER =====
-slackApp.action(/.*/, async ({ ack, body, client }) => {
-  await ack();
-
-  const action = body.actions[0].value;
-
-  await client.chat.postMessage({
-    channel: body.channel.id,
-    thread_ts: body.message.thread_ts || body.message.ts,
-    text: `Quick triage selected: *${action}*`
-  });
 });
 
 // ===== RESOLVE COMMAND =====
