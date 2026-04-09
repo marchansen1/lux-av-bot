@@ -8,24 +8,22 @@ import Redis from 'ioredis';
 
 dotenv.config();
 
-// ===== INIT SERVICES =====
-const redis = new Redis(process.env.REDIS_URL);
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-// ===== SLACK RECEIVER (CRITICAL FOR EVENTS) =====
+// ===== EXPRESS RECEIVER =====
 const receiver = new ExpressReceiver({
-  signingSecret: process.env.SLACK_SIGNING_SECRET,
-  endpoints: '/slack/events',
-  processBeforeResponse: true
+  signingSecret: process.env.SLACK_SIGNING_SECRET
 });
 
-// ===== FORCE SLACK CHALLENGE RESPONSE =====
-receiver.router.post('/slack/events', (req, res, next) => {
+// ===== HANDLE SLACK URL VERIFICATION =====
+receiver.app.post('/slack/events', (req, res, next) => {
   if (req.body && req.body.type === 'url_verification') {
     return res.status(200).send(req.body.challenge);
   }
   next();
 });
+
+// ===== INIT SERVICES =====
+const redis = new Redis(process.env.REDIS_URL);
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // ===== SLACK APP =====
 const slackApp = new App({
