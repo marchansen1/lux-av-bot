@@ -7,6 +7,12 @@ import Redis from 'ioredis';
 
 dotenv.config();
 
+slackApp.event('app_mention', async ({ event, say }) => {
+  console.log("MENTION EVENT:", event);
+
+  await say("👋 Lux AV Help Desk online. Describe your issue.");
+});
+
 // ===== RECEIVER =====
 const receiver = new ExpressReceiver({
   signingSecret: process.env.SLACK_SIGNING_SECRET,
