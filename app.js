@@ -1,3 +1,4 @@
+// ===== IMPORTS =====
 import pkg from '@slack/bolt';
 const { App, ExpressReceiver } = pkg;
 
@@ -6,12 +7,6 @@ import dotenv from 'dotenv';
 import Redis from 'ioredis';
 
 dotenv.config();
-
-slackApp.event('app_mention', async ({ event, say }) => {
-  console.log("MENTION EVENT:", event);
-
-  await say("👋 Lux AV Help Desk online. Describe your issue.");
-});
 
 // ===== RECEIVER =====
 const receiver = new ExpressReceiver({
@@ -47,11 +42,6 @@ Max 3 clarifying questions.
 Prioritize safety and show continuity.`;
 
 // ===== HELPERS =====
-async function isHelpChannel(client, channel) {
-  const info = await client.conversations.info({ channel });
-  return info.channel.name === process.env.HELP_CHANNEL;
-}
-
 function isCritical(text) {
   return text.toLowerCase().includes('show critical') || text.includes('🚨');
 }
@@ -65,28 +55,30 @@ async function saveIncident(threadTs, messages) {
   await redis.set(threadTs, JSON.stringify(messages), 'EX', 86400);
 }
 
-// ===== MESSAGE HANDLER =====
-slackApp.event('message', async ({ event, client }) => {
+// ===== MAIN HANDLER (MENTIONS) =====
+slackApp.event('app_mention', async ({ event, say, client }) => {
   try {
-    if (event.bot_id || !event.text) return;
-
-    if (!(await isHelpChannel(client, event.channel))) return;
+    console.log("MENTION EVENT RECEIVED");
 
     const threadTs = event.thread_ts || event.ts;
+    const userText = event.text;
 
+    // 👀 Processing reaction
     await client.reactions.add({
       channel: event.channel,
       timestamp: event.ts,
       name: 'eyes'
     }).catch(() => {});
 
+    // Incident memory
     let history = await getIncident(threadTs);
-    history.push(event.text);
+    history.push(userText);
     history = history.slice(-10);
     await saveIncident(threadTs, history);
 
+    // Priority detection
     let priorityNote = '';
-    if (isCritical(event.text)) {
+    if (isCritical(userText)) {
       priorityNote = '\nPRIORITY: SHOW CRITICAL - fastest workaround first.';
 
       await client.chat.postMessage({
@@ -96,6 +88,7 @@ slackApp.event('message', async ({ event, client }) => {
       });
     }
 
+    // AI response
     const completion = await openai.chat.completions.create({
       model: 'gpt-5.3',
       messages: [
@@ -106,14 +99,20 @@ slackApp.event('message', async ({ event, client }) => {
 
     const reply = completion.choices[0].message.content;
 
-    await client.chat.postMessage({
-      channel: event.channel,
-      thread_ts: threadTs,
-      text: reply
+    await say({
+      text: reply,
+      thread_ts: threadTs
     });
 
+    // ✅ Mark handled
+    await client.reactions.add({
+      channel: event.channel,
+      timestamp: event.ts,
+      name: 'white_check_mark'
+    }).catch(() => {});
+
   } catch (err) {
-    console.error(err);
+    console.error("ERROR:", err);
   }
 });
 
