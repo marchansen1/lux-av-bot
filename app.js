@@ -1,7 +1,5 @@
-import express from 'express';
-import bodyParser from 'body-parser';
 import pkg from '@slack/bolt';
-const { App } = pkg;
+const { App, ExpressReceiver } = pkg;
 
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
@@ -9,31 +7,22 @@ import Redis from 'ioredis';
 
 dotenv.config();
 
-const app = express();
-
-// 🚨 CRITICAL: raw body for Slack
-app.use(bodyParser.json());
-
-// ===== SLACK URL VERIFICATION (THIS FIXES YOUR ISSUE) =====
-app.post('/slack/events', (req, res, next) => {
-  if (req.body.type === 'url_verification') {
-    return res.send(req.body.challenge);
-  }
-  next();
+// ===== RECEIVER =====
+const receiver = new ExpressReceiver({
+  signingSecret: process.env.SLACK_SIGNING_SECRET,
+  endpoints: '/slack/events',
+  processBeforeResponse: true
 });
-
-// ===== SLACK APP =====
-const slackApp = new App({
-  token: process.env.SLACK_BOT_TOKEN,
-  signingSecret: process.env.SLACK_SIGNING_SECRET
-});
-
-// Attach Bolt to Express AFTER verification handler
-app.use('/slack/events', slackApp.receiver.router);
 
 // ===== INIT SERVICES =====
 const redis = new Redis(process.env.REDIS_URL);
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// ===== SLACK APP =====
+const slackApp = new App({
+  token: process.env.SLACK_BOT_TOKEN,
+  receiver
+});
 
 // ===== SYSTEM PROMPT =====
 const SYSTEM_PROMPT = `You are Lux AV Help Desk.
@@ -122,9 +111,24 @@ slackApp.event('message', async ({ event, client }) => {
   }
 });
 
+// ===== RESOLVE COMMAND =====
+slackApp.command('/resolve', async ({ command, ack, client }) => {
+  await ack();
+
+  const threadTs = command.thread_ts || command.ts;
+
+  await redis.del(threadTs);
+
+  await client.chat.postMessage({
+    channel: command.channel_id,
+    thread_ts: threadTs,
+    text: '✅ Incident marked as resolved'
+  });
+});
+
 // ===== START SERVER =====
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+receiver.app.listen(PORT, () => {
+  console.log(`🚀 Lux AV Help Desk running on port ${PORT}`);
 });
