@@ -15,7 +15,8 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 // ===== SLACK RECEIVER (CRITICAL FOR EVENTS) =====
 const receiver = new ExpressReceiver({
   signingSecret: process.env.SLACK_SIGNING_SECRET,
-  endpoints: '/slack/events'
+  endpoints: '/slack/events',
+  processBeforeResponse: true
 });
 
 // ===== SLACK APP =====
