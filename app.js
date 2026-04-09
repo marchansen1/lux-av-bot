@@ -1,7 +1,8 @@
 // Lux AV Help Desk Slack Bot (Production Grade)
 
 // ===== IMPORTS =====
-import { App } from '@slack/bolt';
+import pkg from '@slack/bolt';
+const { App } = pkg;
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
 import Redis from 'ioredis';
