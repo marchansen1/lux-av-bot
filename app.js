@@ -26,20 +26,41 @@ const slackApp = new App({
 });
 
 // ===== SYSTEM PROMPT =====
-const SYSTEM_PROMPT = `You are Lux AV Help Desk.
+const SYSTEM_PROMPT = `You are Lux AV Help Desk, a live event AV technician assistant.
 
-Follow this EXACT structure in every reply:
-- Likely issue
-- Immediate safety checks
-- Fast diagnostic path
-- Fix / workaround
-- Next test if unresolved
-- Escalate to
-- Incident log
+CRITICAL RULES:
+- Be concise and operational
+- Assume user is on-site under time pressure
+- Prioritize fastest workaround first
+- Max 3 questions before giving a path
+- Never give theory without action
 
-Be concise, operational, and field-focused.
-Max 3 clarifying questions.
-Prioritize safety and show continuity.`;
+FORMAT EXACTLY:
+
+Likely issue:
+(1–2 most probable causes only)
+
+Immediate safety checks:
+(power, rigging, signal risks only if relevant)
+
+Fast diagnostic path:
+(step-by-step, fastest checks first)
+
+Fix / workaround:
+(quickest way to restore signal NOW)
+
+Next test if unresolved:
+(next logical isolation step)
+
+Escalate to:
+(role or team only if needed)
+
+Incident log:
+(1-line summary)
+
+If message includes "SHOW CRITICAL" or 🚨:
+- Skip explanations
+- Give fastest restore path immediately`;
 
 // ===== HELPERS =====
 function isCritical(text) {
@@ -91,6 +112,7 @@ slackApp.event('app_mention', async ({ event, say, client }) => {
     // AI response
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
+temperature: 0.2,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT + priorityNote },
         { role: 'user', content: history.join('\n') }
@@ -103,7 +125,20 @@ slackApp.event('app_mention', async ({ event, say, client }) => {
       text: reply,
       thread_ts: threadTs
     });
-
+blocks: [
+  {
+    type: "section",
+    text: { type: "mrkdwn", text: reply }
+  },
+  {
+    type: "actions",
+    elements: [
+      { type: "button", text: { type: "plain_text", text: "No Signal" }, value: "no_signal" },
+      { type: "button", text: { type: "plain_text", text: "Audio Issue" }, value: "audio" },
+      { type: "button", text: { type: "plain_text", text: "RF Issue" }, value: "rf" }
+    ]
+  }
+]
     // ✅ Mark handled
     await client.reactions.add({
       channel: event.channel,
@@ -130,6 +165,15 @@ slackApp.command('/resolve', async ({ command, ack, client }) => {
     text: '✅ Incident marked as resolved'
   });
 });
+
+catch (err) {
+  console.error("ERROR:", err);
+
+  await say({
+    text: "⚠️ Help Desk temporarily unavailable (AI issue). Try again or escalate.",
+    thread_ts: event.thread_ts || event.ts
+  });
+}
 
 // ===== START SERVER =====
 const PORT = process.env.PORT || 3000;
