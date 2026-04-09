@@ -18,14 +18,6 @@ const slackApp = new App({
   signingSecret: process.env.SLACK_SIGNING_SECRET
 });
 
-// ===== SLACK URL VERIFICATION =====
-slackApp.receiver.router.post('/slack/events', (req, res) => {
-  if (req.body?.type === 'url_verification') {
-    return res.send(req.body.challenge);
-  }
-  return res.status(200).end();
-});
-
 // ===== SYSTEM PROMPT =====
 const SYSTEM_PROMPT = `You are Lux AV Help Desk.
 
