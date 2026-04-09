@@ -2,7 +2,22 @@
 
 // ===== IMPORTS =====
 import pkg from '@slack/bolt';
-const { App } = pkg;
+const { App, ExpressReceiver } = pkg;
+
+// Create receiver with correct endpoint
+const receiver = new ExpressReceiver({
+  signingSecret: process.env.SLACK_SIGNING_SECRET,
+  endpoints: '/slack/events'
+});
+const PORT = process.env.PORT || 3000;
+
+receiver.app.listen(PORT, () => {
+  console.log(`🚀 Lux AV Help Desk running on port ${PORT}`);
+});
+const slackApp = new App({
+  token: process.env.SLACK_BOT_TOKEN,
+  receiver
+});
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
 import Redis from 'ioredis';
