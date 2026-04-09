@@ -90,7 +90,7 @@ slackApp.event('app_mention', async ({ event, say, client }) => {
 
     // AI response
     const completion = await openai.chat.completions.create({
-      model: 'gpt-5.3',
+      model: 'gpt-4o-mini',
       messages: [
         { role: 'system', content: SYSTEM_PROMPT + priorityNote },
         { role: 'user', content: history.join('\n') }
