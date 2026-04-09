@@ -19,6 +19,14 @@ const receiver = new ExpressReceiver({
   processBeforeResponse: true
 });
 
+// ===== FORCE SLACK CHALLENGE RESPONSE =====
+receiver.router.post('/slack/events', (req, res, next) => {
+  if (req.body && req.body.type === 'url_verification') {
+    return res.status(200).send(req.body.challenge);
+  }
+  next();
+});
+
 // ===== SLACK APP =====
 const slackApp = new App({
   token: process.env.SLACK_BOT_TOKEN,
