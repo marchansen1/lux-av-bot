@@ -15,7 +15,7 @@ const receiver = new ExpressReceiver({
   processBeforeResponse: true
 });
 
-// ===== INIT SERVICES =====
+// ===== SERVICES =====
 const redis = new Redis(process.env.REDIS_URL);
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -33,40 +33,38 @@ CRITICAL RULES:
 - Assume user is on-site under time pressure
 - Prioritize fastest workaround first
 - Max 3 questions before giving a path
-- Never give theory without action
+- No theory without action
 
 FORMAT EXACTLY:
 
 Likely issue:
-(1–2 most probable causes only)
-
 Immediate safety checks:
-(power, rigging, signal risks only if relevant)
-
 Fast diagnostic path:
-(step-by-step, fastest checks first)
-
 Fix / workaround:
-(quickest way to restore signal NOW)
-
 Next test if unresolved:
-(next logical isolation step)
-
 Escalate to:
-(role or team only if needed)
+Incident log:`;
 
-Incident log:
-(1-line summary)
+// ===== CONTEXT DETECTION =====
+function detectContext(text) {
+  const t = text.toLowerCase();
 
-If message includes "SHOW CRITICAL" or 🚨:
-- Skip explanations
-- Give fastest restore path immediately`;
+  if (t.includes("hdmi")) return "HDMI signal path issue (EDID / handshake / cable)";
+  if (t.includes("sdi")) return "SDI signal path issue (BNC / converter / routing)";
+  if (t.includes("wireless") || t.includes("barco") || t.includes("clickshare"))
+    return "Wireless presentation issue (pairing / network / dongle)";
+  if (t.includes("mic") || t.includes("audio"))
+    return "Audio signal issue (gain / mute / routing)";
+  if (t.includes("power"))
+    return "Power issue (supply / distro / IEC)";
 
-// ===== HELPERS =====
-function isCritical(text) {
-  return text.toLowerCase().includes('show critical') || text.includes('🚨');
+  if (t.includes("no signal"))
+    return "Display signal issue (cable / input / source mismatch)";
+
+  return "General AV issue";
 }
 
+// ===== INCIDENT MEMORY =====
 async function getIncident(threadTs) {
   const data = await redis.get(threadTs);
   return data ? JSON.parse(data) : [];
@@ -76,7 +74,7 @@ async function saveIncident(threadTs, messages) {
   await redis.set(threadTs, JSON.stringify(messages), 'EX', 86400);
 }
 
-// ===== MAIN HANDLER (MENTIONS) =====
+// ===== MAIN HANDLER =====
 slackApp.event('app_mention', async ({ event, say, client }) => {
   try {
     console.log("MENTION EVENT RECEIVED");
@@ -84,62 +82,73 @@ slackApp.event('app_mention', async ({ event, say, client }) => {
     const threadTs = event.thread_ts || event.ts;
     const userText = event.text;
 
-    // 👀 Processing reaction
+    // 👀 reaction
     await client.reactions.add({
       channel: event.channel,
       timestamp: event.ts,
       name: 'eyes'
     }).catch(() => {});
 
-    // Incident memory
+    // ===== CONTEXT =====
+    const contextHint = detectContext(userText);
+
+    // ===== MEMORY =====
     let history = await getIncident(threadTs);
     history.push(userText);
     history = history.slice(-10);
     await saveIncident(threadTs, history);
 
-    // Priority detection
-    let priorityNote = '';
-    if (isCritical(userText)) {
-      priorityNote = '\nPRIORITY: SHOW CRITICAL - fastest workaround first.';
-
-      await client.chat.postMessage({
-        channel: event.channel,
-        thread_ts: threadTs,
-        text: `🚨 Escalation triggered ${process.env.ESCALATION_USER}`
-      });
+    // ===== PRIORITY =====
+    let priorityNote = "";
+    if (userText.toLowerCase().includes("show critical") || userText.includes("🚨")) {
+      priorityNote = "\nPRIORITY: SHOW CRITICAL - fastest restore path only.";
     }
 
-    // AI response
+    // ===== AI =====
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
-temperature: 0.2,
+      temperature: 0.2,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT + priorityNote },
+        { role: 'system', content: `Context: ${contextHint}` },
         { role: 'user', content: history.join('\n') }
       ]
     });
 
     const reply = completion.choices[0].message.content;
 
+    // ===== RESPONSE + BUTTONS =====
     await say({
-      text: reply,
-      thread_ts: threadTs
+      thread_ts: threadTs,
+      blocks: [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: reply }
+        },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: { type: "plain_text", text: "No Signal" },
+              value: "no_signal"
+            },
+            {
+              type: "button",
+              text: { type: "plain_text", text: "Audio Issue" },
+              value: "audio"
+            },
+            {
+              type: "button",
+              text: { type: "plain_text", text: "Wireless" },
+              value: "wireless"
+            }
+          ]
+        }
+      ]
     });
-blocks: [
-  {
-    type: "section",
-    text: { type: "mrkdwn", text: reply }
-  },
-  {
-    type: "actions",
-    elements: [
-      { type: "button", text: { type: "plain_text", text: "No Signal" }, value: "no_signal" },
-      { type: "button", text: { type: "plain_text", text: "Audio Issue" }, value: "audio" },
-      { type: "button", text: { type: "plain_text", text: "RF Issue" }, value: "rf" }
-    ]
-  }
-]
-    // ✅ Mark handled
+
+    // ✅ done reaction
     await client.reactions.add({
       channel: event.channel,
       timestamp: event.ts,
@@ -148,7 +157,25 @@ blocks: [
 
   } catch (err) {
     console.error("ERROR:", err);
+
+    await say({
+      text: "⚠️ Help Desk temporarily unavailable. Try again or escalate.",
+      thread_ts: event.thread_ts || event.ts
+    });
   }
+});
+
+// ===== BUTTON HANDLER =====
+slackApp.action(/.*/, async ({ ack, body, client }) => {
+  await ack();
+
+  const action = body.actions[0].value;
+
+  await client.chat.postMessage({
+    channel: body.channel.id,
+    thread_ts: body.message.thread_ts || body.message.ts,
+    text: `Quick triage selected: *${action}*`
+  });
 });
 
 // ===== RESOLVE COMMAND =====
@@ -165,15 +192,6 @@ slackApp.command('/resolve', async ({ command, ack, client }) => {
     text: '✅ Incident marked as resolved'
   });
 });
-
-catch (err) {
-  console.error("ERROR:", err);
-
-  await say({
-    text: "⚠️ Help Desk temporarily unavailable (AI issue). Try again or escalate.",
-    thread_ts: event.thread_ts || event.ts
-  });
-}
 
 // ===== START SERVER =====
 const PORT = process.env.PORT || 3000;
