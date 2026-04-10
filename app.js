@@ -101,9 +101,8 @@ app.event('message', async ({ event, say, client }) => {
 
     if (event.bot_id || event.subtype) return;
 
-    // ✅ channel filter (safe)
-    if (process.env.HELP_CHANNEL_ID) {
-      if (event.channel !== process.env.HELP_CHANNEL_ID) return;
+    if (process.env.HELP_CHANNEL_ID && event.channel !== process.env.HELP_CHANNEL_ID) {
+      return;
     }
 
     // ===== DEDUPE =====
@@ -138,9 +137,9 @@ app.event('message', async ({ event, say, client }) => {
               role: "system",
               content: `You are a senior AV technician.
 
-Give a short, practical diagnosis and immediate next check.
-Use real AV terminology.
-Include menu paths if relevant.`
+Give a short, practical diagnosis and next step.
+Include menu paths where useful.
+Be concise.`
             },
             {
               role: "user",
@@ -166,23 +165,54 @@ Include menu paths if relevant.`
       return;
     }
 
-    // ===== HANDLE ANSWERS =====
+    // ===== SMART MODE SWITCHING =====
     const step = flowState.steps[flowState.step];
 
-    let branch;
-    if (text.includes("yes")) branch = "yes";
-    else if (text.includes("no")) branch = "no";
-    else {
+    const isSimple =
+      text.trim() === "yes" ||
+      text.trim() === "no";
+
+    // ===== COMPLEX RESPONSE → AI =====
+    if (!isSimple) {
+      let aiReply = "";
+
+      try {
+        const ai = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          temperature: 0.2,
+          messages: [
+            {
+              role: "system",
+              content: `You are a senior AV technician continuing troubleshooting.
+
+Respond naturally to the technician update.
+Give the next best action.
+Be concise and practical.`
+            },
+            {
+              role: "user",
+              content: text
+            }
+          ]
+        });
+
+        aiReply = ai.choices[0].message.content;
+      } catch (err) {
+        aiReply = "⚠️ Could not interpret response.";
+      }
+
       await say({
         thread_ts: threadTs,
-        text: "Reply with *yes* or *no*"
+        text: aiReply
       });
+
       return;
     }
 
+    // ===== YES/NO → FLOW =====
+    const branch = text.trim();
     const next = step[branch];
 
-    // ===== FIX =====
     if (typeof next === "string" && next.startsWith("fix")) {
       await say({
         thread_ts: threadTs,
@@ -193,7 +223,6 @@ Include menu paths if relevant.`
       return;
     }
 
-    // ===== DONE =====
     if (next === "done") {
       await say({
         thread_ts: threadTs,
@@ -204,7 +233,6 @@ Include menu paths if relevant.`
       return;
     }
 
-    // ===== NEXT STEP =====
     flowState.step = next;
     await saveFlowState(threadTs, flowState);
 
