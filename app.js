@@ -57,42 +57,31 @@ Wireless:
 
 Comms:
 - RTS OMS Advanced Master Station
-- RTS DBP 4F 4CH Wired Beltpack Substations
-- RTS Roameo AP-1800 Wireless Access Point
-- RTS Roameo TR-1800 4CH Wireless Beltpack Substations
+- RTS DBP 4F Wired Beltpacks
+- RTS Roameo wireless system
 
 Audio:
-- QSC systems
-- d&B audiotechnik system
-- JBL Vertec system
-- L-Acoustic Syva system
-- Shure wireless mics
+- QSC
+- d&B
+- JBL Vertec
+- L-Acoustics
+- Shure wireless
 
 Cabling:
-- SDI (BNC)
-- HDMI (including adapters)
+- SDI
+- HDMI
 - XLR
 - DMX
-- RJ45 ethernet
-- Ethercon 
-
-Common Issues:
-- HDMI handshake failures (especially Mac adapters)
-- SDI sync loss via converters
-- LED Screens have the wrong mapping configuration 
+- RJ45 / Ethercon
 `;
 
 // ===== SYSTEM PROMPT =====
 const SYSTEM_PROMPT = `You are Lux AV Help Desk, a senior live event AV technician.
 
-GOAL:
-Rapidly diagnose issues with minimal back-and-forth.
-
-RULES:
-- Ask up to 3 targeted questions FIRST if cause is unclear
-- Only give full troubleshooting steps AFTER narrowing problem
-- Prioritize fastest isolation of fault
-- No theory, only actionable checks
+- Ask targeted questions first
+- Be concise and operational
+- Use exact menu paths when relevant
+- No theory, only actions
 
 FORMAT:
 
@@ -102,141 +91,188 @@ Fast diagnostic path:
 Fix / workaround:
 Next test if unresolved:
 Escalate to:
-Incident log:
+`;
 
-CRITICAL MODE (🚨 or SHOW CRITICAL):
-→ Skip questions
-→ Give fastest workaround immediately`;
-
-// ===== CONTEXT DETECTION =====
-function detectContext(text) {
+// ===== DETECTION =====
+function detectDevice(text) {
   const t = text.toLowerCase();
 
-  if (t.includes("hdmi")) return "HDMI signal path (EDID / handshake)";
-  if (t.includes("sdi")) return "SDI signal path (BNC / routing)";
-  if (t.includes("clickshare") || t.includes("wireless"))
-    return "Wireless presentation system";
-  if (t.includes("audio") || t.includes("mic"))
-    return "Audio system issue";
-  if (t.includes("no signal"))
-    return "Display signal issue";
+  if (t.includes("barco") || t.includes("e2")) return "Barco E2";
+  if (t.includes("novastar") || t.includes("mctrl")) return "Novastar";
+  if (t.includes("ptz") || t.includes("aw-")) return "PTZ";
+  if (t.includes("teradek") || t.includes("dji")) return "Wireless";
 
-  return "General AV issue";
+  return null;
 }
 
-// ===== INCIDENT MEMORY =====
-async function getIncident(threadTs) {
-  const data = await redis.get(threadTs);
-  return data ? JSON.parse(data) : [];
+// ===== FLOW ENGINE =====
+function getFlow(device) {
+  if (device === "Barco E2") {
+    return [
+      { q: "Is input detected? (Menu → Input → Status)", yes: 1, no: "fix_input" },
+      { q: "Is input routed correctly? (Menu → Destination)", yes: 2, no: "fix_routing" },
+      { q: "Is layer visible? (Menu → Layers)", yes: 3, no: "fix_layer" },
+      { q: "Is output correct? (Menu → Outputs)", yes: "done", no: "fix_output" }
+    ];
+  }
+
+  if (device === "Novastar") {
+    return [
+      { q: "Correct input selected? (Menu → Input Settings)", yes: 1, no: "fix_input" },
+      { q: "Signal detected? (Menu → Status)", yes: 2, no: "fix_input" },
+      { q: "Mapping correct? (Screen Config)", yes: 3, no: "fix_mapping" },
+      { q: "Brightness > 0? (Display Control)", yes: "done", no: "fix_output" }
+    ];
+  }
+
+  if (device === "PTZ") {
+    return [
+      { q: "Camera powered and on network?", yes: 1, no: "fix_power" },
+      { q: "Controller sees camera?", yes: 2, no: "fix_network" },
+      { q: "Camera moves?", yes: 3, no: "fix_control" },
+      { q: "Video output connected?", yes: "done", no: "fix_output" }
+    ];
+  }
+
+  if (device === "Wireless") {
+    return [
+      { q: "Transmitter powered + input present?", yes: 1, no: "fix_input" },
+      { q: "Receiver paired?", yes: 2, no: "fix_pairing" },
+      { q: "Signal strength OK?", yes: 3, no: "fix_rf" },
+      { q: "Output connected?", yes: "done", no: "fix_output" }
+    ];
+  }
+
+  return [
+    { q: "Is source outputting signal?", yes: 1, no: "fix_input" },
+    { q: "Is signal reaching next device?", yes: 2, no: "fix_cable" },
+    { q: "Is output device correct?", yes: "done", no: "fix_output" }
+  ];
 }
 
-async function saveIncident(threadTs, messages) {
-  await redis.set(threadTs, JSON.stringify(messages), 'EX', 86400);
+// ===== FIX RESPONSES =====
+function getFix(action) {
+  const fixes = {
+    fix_input: "🔧 Check source output and input selection.",
+    fix_routing: "🔧 Check routing configuration.",
+    fix_layer: "🔧 Ensure layer is visible.",
+    fix_output: "🔧 Check display input/source.",
+    fix_mapping: "🔧 Verify LED mapping.",
+    fix_pairing: "🔧 Re-pair TX/RX.",
+    fix_rf: "🔧 Check interference/signal strength.",
+    fix_power: "🔧 Check power supply.",
+    fix_network: "🔧 Check IP/network config.",
+    fix_control: "🔧 Check controller assignment.",
+    fix_cable: "🔧 Check cables."
+  };
+
+  return fixes[action];
+}
+
+// ===== FLOW STATE =====
+async function getFlowState(id) {
+  const data = await redis.get(`flow:${id}`);
+  return data ? JSON.parse(data) : null;
+}
+
+async function saveFlowState(id, state) {
+  await redis.set(`flow:${id}`, JSON.stringify(state), "EX", 3600);
+}
+
+async function clearFlowState(id) {
+  await redis.del(`flow:${id}`);
 }
 
 // ===== MAIN HANDLER =====
-slackApp.event('app_mention', async ({ event, say, client }) => {
+slackApp.event('message', async ({ event, say, client }) => {
   try {
-    console.log("MENTION EVENT RECEIVED");
-
-    // ignore bot + system messages
     if (event.bot_id || event.subtype) return;
 
-    // ===== DEDUPE =====
+    const channelInfo = await client.conversations.info({ channel: event.channel });
+    if (channelInfo.channel.name !== process.env.HELP_CHANNEL) return;
+
     const eventKey = `event:${event.ts}`;
-    const alreadyProcessed = await redis.get(eventKey);
-    if (alreadyProcessed) return;
+    if (await redis.get(eventKey)) return;
     await redis.set(eventKey, "1", "EX", 60);
 
     const threadTs = event.thread_ts || event.ts;
-    const userText = event.text;
+    const text = event.text.toLowerCase();
 
-    // 👀 reaction
     await client.reactions.add({
       channel: event.channel,
       timestamp: event.ts,
       name: 'eyes'
     }).catch(() => {});
 
-    // ===== CONTEXT =====
-    const contextHint = detectContext(userText);
+    const flowState = await getFlowState(threadTs);
 
-    // ===== MEMORY =====
-    let history = await getIncident(threadTs);
-    history.push(userText);
-    history = history.slice(-10);
-    await saveIncident(threadTs, history);
+    // ===== START FLOW =====
+    if (!flowState) {
+      const device = detectDevice(text);
+      const steps = getFlow(device);
 
-    // ===== PRIORITY =====
-    let priorityNote = "";
-    if (userText.toLowerCase().includes("show critical") || userText.includes("🚨")) {
-      priorityNote = "\nPRIORITY: SHOW CRITICAL - fastest restore path only.";
+      await saveFlowState(threadTs, { step: 0, steps });
+
+      await say({
+        thread_ts: threadTs,
+        text: `🔍 Starting troubleshooting (${device || "system"})\n\n${steps[0].q}`
+      });
+
+      return;
     }
 
-    // ===== QUESTION-FIRST LOGIC =====
-    const needsQuestions =
-      userText.length < 50 ||
-      userText.toLowerCase().includes("not working") ||
-      userText.toLowerCase().includes("issue");
+    // ===== HANDLE ANSWER =====
+    const step = flowState.steps[flowState.step];
 
-    // ===== AI CALL =====
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      temperature: 0.2,
-      messages: [
-        {
-          role: 'system',
-          content: SYSTEM_PROMPT + priorityNote + (needsQuestions ? "\nAsk questions first." : "")
-        },
-        { role: 'system', content: EQUIPMENT_PROFILE },
-        { role: 'system', content: `Context: ${contextHint}` },
-        { role: 'user', content: history.join('\n') }
-      ]
-    });
+    let branch;
+    if (text.includes("yes")) branch = "yes";
+    else if (text.includes("no")) branch = "no";
+    else {
+      await say({
+        thread_ts: threadTs,
+        text: "Reply with *yes* or *no*"
+      });
+      return;
+    }
 
-    const reply = completion.choices[0].message.content;
+    const next = step[branch];
 
-    // ===== RESPONSE =====
+    if (typeof next === "string" && next.startsWith("fix")) {
+      await say({
+        thread_ts: threadTs,
+        text: getFix(next)
+      });
+
+      await clearFlowState(threadTs);
+      return;
+    }
+
+    if (next === "done") {
+      await say({
+        thread_ts: threadTs,
+        text: "✅ Signal path confirmed. Escalate if still unresolved."
+      });
+
+      await clearFlowState(threadTs);
+      return;
+    }
+
+    flowState.step = next;
+    await saveFlowState(threadTs, flowState);
+
     await say({
       thread_ts: threadTs,
-      text: reply
+      text: flowState.steps[next].q
     });
-
-    // ✅ done reaction
-    await client.reactions.add({
-      channel: event.channel,
-      timestamp: event.ts,
-      name: 'white_check_mark'
-    }).catch(() => {});
 
   } catch (err) {
-    console.error("ERROR:", err);
-
-    await say({
-      text: "⚠️ Help Desk temporarily unavailable. Try again or escalate.",
-      thread_ts: event.thread_ts || event.ts
-    });
+    console.error(err);
   }
 });
 
-// ===== RESOLVE COMMAND =====
-slackApp.command('/resolve', async ({ command, ack, client }) => {
-  await ack();
-
-  const threadTs = command.thread_ts || command.ts;
-
-  await redis.del(threadTs);
-
-  await client.chat.postMessage({
-    channel: command.channel_id,
-    thread_ts: threadTs,
-    text: '✅ Incident marked as resolved'
-  });
-});
-
-// ===== START SERVER =====
+// ===== START =====
 const PORT = process.env.PORT || 3000;
 
 receiver.app.listen(PORT, () => {
-  console.log(`🚀 Lux AV Help Desk running on port ${PORT}`);
+  console.log(`🚀 Lux AV Help Desk running`);
 });
