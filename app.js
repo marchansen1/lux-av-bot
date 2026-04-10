@@ -4,6 +4,7 @@ const { App, ExpressReceiver } = pkg;
 
 import dotenv from 'dotenv';
 import Redis from 'ioredis';
+import OpenAI from 'openai';
 
 dotenv.config();
 
@@ -16,6 +17,10 @@ const receiver = new ExpressReceiver({
 
 // ===== SERVICES =====
 const redis = new Redis(process.env.REDIS_URL);
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
 // ===== APP =====
 const app = new App({
@@ -92,28 +97,18 @@ async function clearFlowState(id) {
 // ===== MAIN HANDLER =====
 app.event('message', async ({ event, say, client }) => {
   try {
-    console.log("🔥 EVENT RECEIVED:", event.text);
+    console.log("🔥 EVENT:", event.text);
 
-    // ignore bots
-    if (event.bot_id || event.subtype) {
-      console.log("⛔ Ignored bot message");
-      return;
-    }
+    if (event.bot_id || event.subtype) return;
 
-    // OPTIONAL channel filter (safe now)
+    // ✅ channel filter (safe)
     if (process.env.HELP_CHANNEL_ID) {
-      if (event.channel !== process.env.HELP_CHANNEL_ID) {
-        console.log("⛔ Wrong channel");
-        return;
-      }
+      if (event.channel !== process.env.HELP_CHANNEL_ID) return;
     }
 
     // ===== DEDUPE =====
     const eventKey = `event:${event.ts}`;
-    if (await redis.get(eventKey)) {
-      console.log("⛔ Duplicate event");
-      return;
-    }
+    if (await redis.get(eventKey)) return;
     await redis.set(eventKey, "1", "EX", 60);
 
     const threadTs = event.thread_ts || event.ts;
@@ -124,27 +119,54 @@ app.event('message', async ({ event, say, client }) => {
       channel: event.channel,
       timestamp: event.ts,
       name: 'eyes'
-    }).catch(err => console.log("Reaction error:", err));
+    }).catch(() => {});
 
     const flowState = await getFlowState(threadTs);
 
-    // ===== START FLOW =====
+    // ===== NEW ISSUE → AI FIRST =====
     if (!flowState) {
       const device = detectDevice(text);
+
+      let aiReply = "🔧 Let’s troubleshoot this.";
+
+      try {
+        const ai = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          temperature: 0.2,
+          messages: [
+            {
+              role: "system",
+              content: `You are a senior AV technician.
+
+Give a short, practical diagnosis and immediate next check.
+Use real AV terminology.
+Include menu paths if relevant.`
+            },
+            {
+              role: "user",
+              content: text
+            }
+          ]
+        });
+
+        aiReply = ai.choices[0].message.content;
+      } catch (err) {
+        console.log("AI error:", err.message);
+      }
+
       const steps = getFlow(device);
 
       await saveFlowState(threadTs, { step: 0, steps });
 
       await say({
         thread_ts: threadTs,
-        text: `🔍 Starting troubleshooting (${device})\n\n${steps[0].q}`
+        text: `${aiReply}\n\n---\n🔧 Step 1:\n${steps[0].q}`
       });
 
-      console.log("✅ Flow started");
       return;
     }
 
-    // ===== HANDLE ANSWER =====
+    // ===== HANDLE ANSWERS =====
     const step = flowState.steps[flowState.step];
 
     let branch;
@@ -160,6 +182,7 @@ app.event('message', async ({ event, say, client }) => {
 
     const next = step[branch];
 
+    // ===== FIX =====
     if (typeof next === "string" && next.startsWith("fix")) {
       await say({
         thread_ts: threadTs,
@@ -167,30 +190,28 @@ app.event('message', async ({ event, say, client }) => {
       });
 
       await clearFlowState(threadTs);
-      console.log("✅ Fix provided");
       return;
     }
 
+    // ===== DONE =====
     if (next === "done") {
       await say({
         thread_ts: threadTs,
-        text: "✅ Troubleshooting complete. Escalate if unresolved."
+        text: "✅ Troubleshooting complete. Escalate if still unresolved."
       });
 
       await clearFlowState(threadTs);
-      console.log("✅ Flow complete");
       return;
     }
 
+    // ===== NEXT STEP =====
     flowState.step = next;
     await saveFlowState(threadTs, flowState);
 
     await say({
       thread_ts: threadTs,
-      text: flowState.steps[next].q
+      text: `🔧 Step ${next + 1}:\n${flowState.steps[next].q}`
     });
-
-    console.log("➡️ Next step");
 
   } catch (err) {
     console.error("❌ ERROR:", err);
